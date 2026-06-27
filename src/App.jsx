@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import appleImage from "./assets/fruits/apple.png";
+import bananaImage from "./assets/fruits/banana.png";
+import peachImage from "./assets/fruits/peach.png";
+import pearImage from "./assets/fruits/pear.png";
+import pineappleImage from "./assets/fruits/pineapple.png";
+import watermelonImage from "./assets/fruits/watermelon.png";
 
 const size = 8;
 const candyTypes = 6;
 const targetScore = 1800;
 const startingMoves = 26;
-const initialMessage = "交换相邻糖果，连成三个或更多即可消除。";
+const initialMessage = "交换相邻水果，连成三个或更多即可消除。";
+const fruits = [
+  { name: "苹果", image: appleImage },
+  { name: "香蕉", image: bananaImage },
+  { name: "菠萝", image: pineappleImage },
+  { name: "梨子", image: pearImage },
+  { name: "西瓜", image: watermelonImage },
+  { name: "桃子", image: peachImage },
+];
 
 function randomCandy() {
   return Math.floor(Math.random() * candyTypes);
@@ -274,7 +288,7 @@ function App() {
         const gained = matches.size * 40 * chain;
         activeScore += gained;
         setScore(activeScore);
-        setMessage(chain === 1 ? `消除了 ${matches.size} 颗糖果，+${gained} 分。` : `连锁 x${chain}，+${gained} 分！`);
+        setMessage(chain === 1 ? `消除了 ${matches.size} 个水果，+${gained} 分。` : `连锁 x${chain}，+${gained} 分！`);
         setClearingCells(new Set(matches));
         setBoard(activeBoard);
         await wait(260);
@@ -312,7 +326,7 @@ function App() {
 
       if (!areNeighbors(selectedCell, clicked)) {
         setSelectedCell(clicked);
-        setMessage("请选择相邻的糖果进行交换。");
+        setMessage("请选择相邻的水果进行交换。");
         return;
       }
 
@@ -343,11 +357,11 @@ function App() {
 
   return (
     <main className="game-shell">
-      <section className="stage" aria-label="糖果连连消游戏">
+      <section className="stage" aria-label="水果消消乐游戏">
         <div className="topbar">
           <div>
             <p className="eyebrow">Match 3</p>
-            <h1>糖果连连消</h1>
+            <h1>水果消消乐</h1>
           </div>
           <div className="toolbar" aria-label="游戏工具">
             <button
@@ -407,10 +421,12 @@ function App() {
                   data-row={row}
                   data-col={col}
                   data-kind={kind}
-                  aria-label={`第 ${row + 1} 行第 ${col + 1} 列糖果`}
+                  aria-label={`第 ${row + 1} 行第 ${col + 1} 列${fruits[kind].name}`}
                   disabled={busy || gameOver}
                   onClick={() => handleCandyClick(row, col)}
-                />
+                >
+                  <img className="fruit-image" src={fruits[kind].image} alt="" draggable="false" />
+                </button>
               );
             })}
           </div>
@@ -445,7 +461,7 @@ function App() {
             <div className="help-content">
               <div>
                 <strong>怎么玩</strong>
-                <p>点击两个相邻糖果交换位置，横向或纵向连成 3 个及以上同色糖果即可消除。</p>
+                <p>点击两个相邻水果交换位置，横向或纵向连成 3 个及以上同种水果即可消除。</p>
               </div>
               <div>
                 <strong>过关目标</strong>
@@ -453,11 +469,11 @@ function App() {
               </div>
               <div>
                 <strong>计分规则</strong>
-                <p>每颗被消除的糖果给 40 分。连续掉落产生连锁时，后续消除会获得更高倍率。</p>
+                <p>每个被消除的水果给 40 分。连续掉落产生连锁时，后续消除会获得更高倍率。</p>
               </div>
               <div>
                 <strong>小提示</strong>
-                <p>开局会短暂高亮一组可交换糖果；棋盘无可用交换时会自动刷新。</p>
+                <p>开局会短暂高亮一组可交换水果；棋盘无可用交换时会自动刷新。</p>
               </div>
             </div>
             <button className="primary-button" type="button" onClick={closeHelp}>
