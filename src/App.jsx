@@ -5,6 +5,7 @@ import peachImage from "./assets/fruits/peach.png";
 import pearImage from "./assets/fruits/pear.png";
 import pineappleImage from "./assets/fruits/pineapple.png";
 import watermelonImage from "./assets/fruits/watermelon.png";
+import { authProvider, hasSupabaseConfig, supabase } from "./supabaseClient";
 
 const size = 8;
 const candyTypes = 6;
@@ -165,6 +166,16 @@ function isSameCell(first, second) {
   return first?.row === second.row && first?.col === second.col;
 }
 
+function getUserName(user) {
+  return (
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.user_metadata?.nickname ||
+    user?.email ||
+    "微信玩家"
+  );
+}
+
 function App() {
   const [board, setBoard] = useState(() => createBoard());
   const [selectedCell, setSelectedCell] = useState(null);
@@ -176,9 +187,13 @@ function App() {
   const [clearingCells, setClearingCells] = useState(() => new Set());
   const [hintCells, setHintCells] = useState(() => new Set());
   const [helpOpen, setHelpOpen] = useState(false);
+  const [session, setSession] = useState(null);
+  const [profileSyncing, setProfileSyncing] = useState(false);
+  const [loginMessage, setLoginMessage] = useState("");
   const closeHelpButtonRef = useRef(null);
   const helpButtonRef = useRef(null);
   const hintTimerRef = useRef(null);
+  const lastDurationSyncRef = useRef(null);
 
   const gameOver = gameResult !== null;
   const progressWidth = Math.min(100, Math.round((score / targetScore) * 100));
@@ -250,10 +265,170 @@ function App() {
     };
   }, [helpOpen]);
 
+  const syncProfile = useCallback(async (user, latestLoginAt = null) => {
+    if (!supabase || !user) {
+      return;
+    }
+
+    const { error } = await supabase.from("user_profiles").upsert(
+      {
+        user_id: user.id,
+        username: getUserName(user),
+        latest_login_at: latestLoginAt || new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    );
+
+    if (error) {
+      throw error;
+    }
+  }, []);
+
+  const syncPlayDuration = useCallback(async () => {
+    if (!supabase || !session?.user || !lastDurationSyncRef.current) {
+      return;
+    }
+
+    const now = Date.now();
+    const elapsedSeconds = Math.floor((now - lastDurationSyncRef.current) / 1000);
+
+    if (elapsedSeconds <= 0) {
+      return;
+    }
+
+    const { data, error: readError } = await supabase
+      .from("user_profiles")
+      .select("total_game_duration_seconds")
+      .eq("user_id", session.user.id)
+      .single();
+
+    if (readError) {
+      setLoginMessage("游戏时长同步失败，请稍后重试。");
+      return;
+    }
+
+    const currentDuration = data?.total_game_duration_seconds ?? 0;
+    const { error: updateError } = await supabase
+      .from("user_profiles")
+      .update({ total_game_duration_seconds: currentDuration + elapsedSeconds })
+      .eq("user_id", session.user.id);
+
+    if (updateError) {
+      setLoginMessage("游戏时长同步失败，请稍后重试。");
+      return;
+    }
+
+    lastDurationSyncRef.current = now;
+  }, [session]);
+
+  useEffect(() => {
+    if (!supabase) {
+      return undefined;
+    }
+
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) {
+        return;
+      }
+
+      setSession(data.session);
+      if (data.session?.user) {
+        lastDurationSyncRef.current = Date.now();
+        syncProfile(data.session.user).catch(() => {
+          setLoginMessage("用户信息同步失败，请稍后重试。");
+        });
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      setSession(nextSession);
+
+      if (event === "SIGNED_IN" && nextSession?.user) {
+        lastDurationSyncRef.current = Date.now();
+        setLoginMessage("微信登录成功，游戏数据会自动保存。");
+        syncProfile(nextSession.user).catch(() => {
+          setLoginMessage("用户信息同步失败，请稍后重试。");
+        });
+      }
+
+      if (event === "SIGNED_OUT") {
+        lastDurationSyncRef.current = null;
+        setLoginMessage("已退出登录。");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [syncProfile]);
+
+  useEffect(() => {
+    if (!session?.user) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      syncPlayDuration();
+    }, 30000);
+
+    const handlePageHide = () => {
+      syncPlayDuration();
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("pagehide", handlePageHide);
+      syncPlayDuration();
+    };
+  }, [session, syncPlayDuration]);
+
   const closeHelp = useCallback(() => {
     setHelpOpen(false);
     helpButtonRef.current?.focus();
   }, []);
+
+  const handleWechatLogin = useCallback(async () => {
+    if (!supabase) {
+      setLoginMessage("请先配置 Supabase 环境变量后再登录。");
+      return;
+    }
+
+    setProfileSyncing(true);
+    setLoginMessage("正在跳转微信授权...");
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: authProvider,
+      options: {
+        redirectTo: window.location.origin,
+      },
+    });
+
+    if (error) {
+      setLoginMessage(`微信登录启动失败：${error.message}`);
+      setProfileSyncing(false);
+    }
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    if (!supabase) {
+      return;
+    }
+
+    setProfileSyncing(true);
+    await syncPlayDuration();
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setLoginMessage(`退出失败：${error.message}`);
+    }
+    setProfileSyncing(false);
+  }, [syncPlayDuration]);
 
   const checkGameState = useCallback((nextBoard, nextScore, nextMoves) => {
     if (nextScore >= targetScore) {
@@ -354,6 +529,8 @@ function App() {
 
   const resultTitle = gameResult === "won" ? "通关成功" : "差一点";
   const resultText = gameResult === "won" ? `你拿到了 ${score} 分。` : `最终分数 ${score}，再来一局肯定能过。`;
+  const currentUser = session?.user;
+  const playerName = currentUser ? getUserName(currentUser) : "";
 
   return (
     <main className="game-shell">
@@ -379,6 +556,28 @@ function App() {
             </button>
           </div>
         </div>
+
+        <div className="login-strip" aria-label="登录状态">
+          <div>
+            <span>{currentUser ? "已登录" : "游客模式"}</span>
+            <strong>{currentUser ? playerName : "微信授权后保存游戏数据"}</strong>
+          </div>
+          {currentUser ? (
+            <button className="login-button ghost" type="button" disabled={profileSyncing} onClick={handleLogout}>
+              退出
+            </button>
+          ) : (
+            <button className="login-button wechat" type="button" disabled={!hasSupabaseConfig || profileSyncing} onClick={handleWechatLogin}>
+              微信登录
+            </button>
+          )}
+        </div>
+
+        {loginMessage && (
+          <div className="login-message" aria-live="polite">
+            {loginMessage}
+          </div>
+        )}
 
         <div className="score-strip" aria-label="游戏状态">
           <div className="meter">
